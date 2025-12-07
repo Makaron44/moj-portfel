@@ -6,24 +6,49 @@ from streamlit_gsheets import GSheetsConnection
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Mój Portfel", page_icon="💰")
 
+# ==========================================
+# --- BRAMKARZ (LOGOWANIE) ---
+# ==========================================
+def sprawdz_haslo():
+    """Zwraca True jeśli użytkownik jest zalogowany, inaczej False"""
+    if "zalogowany" not in st.session_state:
+        st.session_state["zalogowany"] = False
+
+    if st.session_state["zalogowany"]:
+        return True
+
+    st.header("🔒 Logowanie")
+    haslo_input = st.text_input("Podaj hasło dostępu:", type="password")
+    
+    if st.button("Zaloguj"):
+        # Sprawdzamy czy hasło pasuje do tego w Secrets
+        if haslo_input == st.secrets["password"]:
+            st.session_state["zalogowany"] = True
+            st.rerun()  # Odświeżamy stronę, żeby wpuścić użytkownika
+        else:
+            st.error("Nieprawidłowe hasło!")
+            
+    return False
+
+# JEŚLI HASŁO NIEPOPRAWNE -> ZATRZYMAJ PROGRAM TU
+if not sprawdz_haslo():
+    st.stop()
+
+# ==========================================
+# --- WŁAŚCIWA APLIKACJA (Dostępna po zalogowaniu) ---
+# ==========================================
+
 # --- SILNIK (GOOGLE SHEETS) ---
 class PortfelGoogle:
     def __init__(self):
-        # Nawiązujemy połączenie z Google Sheets
         self.conn = st.connection("gsheets", type=GSheetsConnection)
         
     def wczytaj_dane(self):
         try:
-            # Czytamy dane z arkusza. ttl=0 oznacza "zawsze pobieraj świeże"
             df = self.conn.read(ttl=0)
-            # Jeśli arkusz jest pusty lub ma same nagłówki, zwróć pusty DataFrame z odpowiednimi kolumnami
             if df.empty:
                 return pd.DataFrame(columns=["data", "typ", "kategoria", "kwota", "opis"])
-            
-            # Usuwamy puste wiersze (jeśli są)
             df = df.dropna(how="all")
-            
-            # Upewniamy się, że kolumny są w dobrym formacie
             return df
         except Exception as e:
             st.error(f"Błąd połączenia z Arkuszem: {e}")
@@ -33,16 +58,12 @@ class PortfelGoogle:
         if kwota <= 0:
             return False, "Kwota musi być dodatnia!"
         
-        # Pobieramy aktualne dane, żeby mieć do czego dopisać
         df = self.wczytaj_dane()
-        
-        # Obliczamy saldo
         aktualne_saldo = df["kwota"].sum() if not df.empty else 0.0
         
         if typ == "Wydatek" and kwota > aktualne_saldo:
             return False, "Niewystarczające środki!"
 
-        # Tworzymy nowy wiersz
         nowa_transakcja = pd.DataFrame([{
             "data": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "typ": typ,
@@ -51,10 +72,8 @@ class PortfelGoogle:
             "opis": opis
         }])
 
-        # Dodajemy do istniejących danych
         nowy_df = pd.concat([df, nowa_transakcja], ignore_index=True)
         
-        # Wysyłamy do Google Sheets
         try:
             self.conn.update(data=nowy_df)
             return True, "Dodano pomyślnie!"
@@ -70,7 +89,12 @@ class PortfelGoogle:
 # Inicjalizacja
 portfel = PortfelGoogle()
 
-st.title("💰 Twój Wirtualny Portfel (Online)")
+# Przycisk wylogowania na pasku bocznym
+if st.sidebar.button("Wyloguj"):
+    st.session_state["zalogowany"] = False
+    st.rerun()
+
+st.title("💰 Twój Wirtualny Portfel")
 
 # --- WYŚWIETLANIE SALDA ---
 saldo = portfel.oblicz_saldo()
@@ -90,7 +114,7 @@ else:
     kat_input = st.sidebar.selectbox("Kategoria:", kategorie)
 
 if st.sidebar.button("Dodaj transakcję"):
-    with st.spinner("Zapisuję w Google Sheets..."):
+    with st.spinner("Zapisuję..."):
         sukces, komunikat = portfel.dodaj_transakcje(typ_transakcji, kwota_input, kat_input, opis_input)
         if sukces:
             st.success(f"{komunikat}")
@@ -102,26 +126,20 @@ if st.sidebar.button("Dodaj transakcję"):
 st.divider()
 
 tab1, tab2 = st.tabs(["📋 Historia", "📊 Wykresy"])
-
-# Pobieramy dane raz, żeby użyć w obu zakładkach
 df_aktualne = portfel.wczytaj_dane()
 
 with tab1:
     if not df_aktualne.empty:
-        # Sortujemy od najnowszych
         if "data" in df_aktualne.columns:
-             # Sortowanie proste (tekstowe) wystarczy na początek
              df_wyswietl = df_aktualne.sort_index(ascending=False)
         else:
              df_wyswietl = df_aktualne
-
         st.dataframe(df_wyswietl, use_container_width=True, hide_index=True)
     else:
-        st.info("Arkusz jest pusty. Dodaj pierwszą transakcję!")
+        st.info("Arkusz jest pusty.")
 
 with tab2:
     if not df_aktualne.empty:
-        # Filtrujemy wydatki
         wydatki = df_aktualne[df_aktualne["kwota"] < 0].copy()
         if not wydatki.empty:
             wydatki["kwota"] = wydatki["kwota"].abs()
