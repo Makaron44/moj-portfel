@@ -271,37 +271,65 @@ with tab1:
 # === TAB 2: HISTORIA ===
 with tab2:
     if not df.empty:
-        # Dodajemy informację o statusie (Realne/Oczekujące) w tabeli
+        # Dodajemy informację o statusie
         df_hist = df.copy()
         df_hist["Status"] = df_hist["data"].apply(lambda x: "🕒 Oczekujące" if x > datetime.datetime.now() else "✅ Zaksięgowane")
         
-        f_col1, f_col2, f_col3 = st.columns(3)
+        # --- SEKCJA FILTRÓW (TERAZ Z WYSZUKIWARKĄ) ---
+        st.caption("Filtrowanie i przeszukiwanie bazy")
+        
+        # Rząd 1: Wyszukiwarka tekstowa (To jest nowość!)
+        szukana_fraza = st.text_input("🔍 Szukaj w opisach (np. 'Biedronka', 'Prezent'):", placeholder="Wpisz szukane słowo...")
+
+        # Rząd 2: Filtry standardowe
+        f_col1, f_col2 = st.columns(2)
         with f_col1:
             dostepne_kategorie = df["kategoria"].unique().tolist()
-            wybrane_kategorie = st.multiselect("Filtruj:", dostepne_kategorie, default=dostepne_kategorie)
+            wybrane_kategorie = st.multiselect("Filtruj kategorie:", dostepne_kategorie, default=dostepne_kategorie)
         with f_col2:
             min_d = df["data"].min().date()
             max_d = df["data"].max().date()
-            d_od, d_do = st.date_input("Zakres:", [min_d, max_d])
+            d_od, d_do = st.date_input("Zakres dat:", [min_d, max_d])
         
+        # --- LOGIKA FILTROWANIA ---
+        # 1. Filtrujemy po kategoriach i dacie
         maska = df["kategoria"].isin(wybrane_kategorie) & (df["data"].dt.date >= d_od) & (df["data"].dt.date <= d_do)
+        
+        # 2. Jeśli ktoś coś wpisał w wyszukiwarkę -> dodajemy ten warunek
+        if szukana_fraza:
+            # case=False oznacza, że wielkość liter nie ma znaczenia (Auto = auto)
+            # na=False oznacza, że ignorujemy puste opisy
+            maska = maska & (df["opis"].str.contains(szukana_fraza, case=False, na=False))
+
+        # Aplikujemy filtry
         df_f = df_hist[maska].copy().sort_values(by="data", ascending=False)
         
+        # --- PODSUMOWANIE WYNIKÓW ---
+        st.divider()
+        col_res1, col_res2 = st.columns([1, 3])
+        
         suma = df_f["kwota"].sum()
-        with f_col3:
+        with col_res1:
+            st.markdown("Wynik wyszukiwania:")
             kolor = "green" if suma >= 0 else "red"
-            st.markdown(f"Suma: <span style='color:{kolor}; font-size: 1.5em; font-weight:bold'>{suma:.2f} PLN</span>", unsafe_allow_html=True)
+            st.markdown(f"<span style='color:{kolor}; font-size: 1.8em; font-weight:bold'>{suma:.2f} PLN</span>", unsafe_allow_html=True)
+            st.caption(f"Znaleziono: {len(df_f)} operacji")
 
+        # --- TABELA ---
         def koloruj(val): return f'color: {"red" if val < 0 else "green"}; font-weight: bold;'
         
-        # Wyświetlamy tabelę z nową kolumną Status
         cols_to_show = ["data", "Status", "typ", "kategoria", "kwota", "opis"]
         df_disp = df_f[cols_to_show].copy()
         df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M")
         
-        st.dataframe(df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), use_container_width=True, hide_index=True)
+        with col_res2:
+            st.dataframe(
+                df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), 
+                use_container_width=True, 
+                hide_index=True
+            )
     else:
-        st.info("Brak danych.")
+        st.info("Brak danych w bazie.")
 
 # === TAB 3: WYKRESY ===
 with tab3:
@@ -316,4 +344,5 @@ with tab3:
                 for i, r in wyd.sort_values("kwota", ascending=False).head(5).iterrows():
                     st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']}")
         else: st.write("Brak wydatków.")
+
 
