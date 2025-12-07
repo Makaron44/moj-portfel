@@ -39,7 +39,6 @@ class PortfelGoogle:
         
     def wczytaj_dane(self):
         try:
-            # Wczytujemy główny arkusz (Arkusz1 - domyślny)
             df = self.conn.read(ttl=0)
             if df.empty:
                 return pd.DataFrame(columns=["data", "typ", "kategoria", "kwota", "opis"])
@@ -53,17 +52,14 @@ class PortfelGoogle:
 
     def wczytaj_limity(self):
         try:
-            # Wczytujemy zakładkę 'limity'
             df_limity = self.conn.read(worksheet="limity", ttl=0)
             df_limity = df_limity.dropna(how="all")
             return df_limity
         except Exception:
-            # Jeśli nie ma zakładki limity, zwracamy pusty, żeby program nie padł
             return pd.DataFrame(columns=["kategoria", "limit"])
 
     def dodaj_transakcje(self, typ, kwota, kategoria, opis):
-        if kwota <= 0:
-            return False, "Kwota musi być dodatnia!"
+        if kwota <= 0: return False, "Kwota musi być dodatnia!"
         
         df = self.wczytaj_dane()
         nowa_transakcja = pd.DataFrame([{
@@ -74,20 +70,61 @@ class PortfelGoogle:
             "opis": opis
         }])
         
-        if not df.empty:
-             df["data"] = df["data"].dt.strftime("%Y-%m-%d %H:%M")
-
+        if not df.empty: df["data"] = df["data"].dt.strftime("%Y-%m-%d %H:%M")
         nowy_df = pd.concat([df, nowa_transakcja], ignore_index=True)
+        
         try:
             self.conn.update(data=nowy_df)
             return True, "Dodano pomyślnie!"
         except Exception as e:
             return False, f"Błąd zapisu: {e}"
 
+    # --- NOWA FUNKCJA: AUTOMAT ---
+    def dodaj_cykliczne(self):
+        try:
+            # 1. Wczytaj definicje z zakładki 'cykliczne'
+            df_cykliczne = self.conn.read(worksheet="cykliczne", ttl=0)
+            df_cykliczne = df_cykliczne.dropna(how="all")
+            
+            if df_cykliczne.empty:
+                return False, "Zakładka 'cykliczne' jest pusta!"
+            
+            # 2. Przygotuj dane do dodania
+            nowe_wiersze = []
+            teraz = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            suma_dodana = 0
+            licznik = 0
+            
+            for index, row in df_cykliczne.iterrows():
+                kwota_baza = float(row['kwota'])
+                kwota_final = kwota_baza if row['typ'] == "Wpływ" else -kwota_baza
+                
+                nowe_wiersze.append({
+                    "data": teraz,
+                    "typ": row['typ'],
+                    "kategoria": row['kategoria'],
+                    "kwota": kwota_final,
+                    "opis": row['opis'] + " (Auto)" # Dodajemy dopisek Auto
+                })
+                suma_dodana += kwota_final
+                licznik += 1
+            
+            # 3. Dodaj do głównej bazy
+            df_main = self.wczytaj_dane()
+            if not df_main.empty: df_main["data"] = df_main["data"].dt.strftime("%Y-%m-%d %H:%M")
+            
+            df_nowe = pd.DataFrame(nowe_wiersze)
+            df_final = pd.concat([df_main, df_nowe], ignore_index=True)
+            
+            self.conn.update(data=df_final)
+            return True, f"Dodano {licznik} operacji na sumę {suma_dodana:.2f} PLN"
+            
+        except Exception as e:
+            return False, f"Błąd automatu: {e} (Sprawdź czy masz zakładkę 'cykliczne')"
+
     def oblicz_saldo(self):
         df = self.wczytaj_dane()
-        if df.empty:
-            return 0.0
+        if df.empty: return 0.0
         return df["kwota"].sum()
 
 portfel = PortfelGoogle()
@@ -95,11 +132,25 @@ portfel = PortfelGoogle()
 # --- PASEK BOCZNY ---
 st.sidebar.title("Panel Sterowania")
 st.sidebar.info(f"Zalogowano jako Administrator")
+
+# === NOWOŚĆ: Przycisk Cykliczne ===
+st.sidebar.markdown("---")
+st.sidebar.write("⚡ **Szybkie akcje**")
+if st.sidebar.button("🔄 Dodaj płatności cykliczne"):
+    with st.spinner("Przetwarzam stałe opłaty..."):
+        sukces, msg = portfel.dodaj_cykliczne()
+        if sukces:
+            st.toast(msg, icon="✅") # Nowoczesne powiadomienie dymek
+            st.rerun()
+        else:
+            st.error(msg)
+st.sidebar.markdown("---")
+
 if st.sidebar.button("Wyloguj"):
     st.session_state["zalogowany"] = False
     st.rerun()
 
-# --- NAGŁÓWEK ---
+# --- GŁÓWNA CZĘŚĆ ---
 st.title("💰 Twój Wirtualny Portfel")
 
 saldo = portfel.oblicz_saldo()
@@ -109,14 +160,14 @@ st.metric(label="Aktualne Saldo", value=f"{saldo:.2f} PLN", delta=f"Stan konta",
 st.divider()
 
 # --- DODAWANIE ---
-with st.expander("➕ Dodaj nową transakcję", expanded=False):
+with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         typ_transakcji = st.radio("Rodzaj:", ["Wydatek", "Wpływ"], horizontal=True)
     with col2:
         kwota_input = st.number_input("Kwota (PLN):", min_value=0.0, format="%.2f", step=1.0)
     with col3:
-        kategorie = ["Jedzenie", "Rachunki", "Transport", "Rozrywka", "Inne", "Wypłata", "Paliwo"]
+        kategorie = ["Jedzenie", "Rachunki", "Transport", "Rozrywka", "Inne", "Wypłata", "Paliwo", "Dom", "Zdrowie"]
         if typ_transakcji == "Wpływ":
             kat_input = "Wpływ"
         else:
@@ -132,121 +183,77 @@ with st.expander("➕ Dodaj nową transakcję", expanded=False):
                 else:
                     st.error(komunikat)
 
-# --- ZAKŁADKI GŁÓWNE ---
+# --- ZAKŁADKI ---
 tab1, tab2, tab3 = st.tabs(["📊 Budżet (Limity)", "📋 Historia i Filtry", "📈 Analiza Wykresowa"])
 
-# Pobieramy dane raz
 df = portfel.wczytaj_dane()
 
-# === ZAKŁADKA 1: STRAŻNIK BUDŻETU ===
+# === TAB 1: BUDŻET ===
 with tab1:
     st.subheader("Twój miesięczny budżet")
-    
-    # 1. Pobieramy limity z Excela
     df_limity = portfel.wczytaj_limity()
-    
     if df_limity.empty:
-        st.warning("⚠️ Nie zdefiniowano limitów w arkuszu! Utwórz zakładkę 'limity' w Google Sheets.")
-        st.info("Kolumny: kategoria | limit")
+        st.warning("⚠️ Brak zakładki 'limity' w arkuszu.")
     elif df.empty:
-        st.info("Brak wydatków do analizy.")
+        st.info("Brak wydatków.")
     else:
-        # 2. Obliczamy wydatki w TYM miesiącu (żeby budżet był miesięczny)
         obecny_miesiac = datetime.datetime.now().month
         obecny_rok = datetime.datetime.now().year
-        
-        # Filtrujemy tylko ten miesiąc
-        df_ten_miesiac = df[
-            (df["data"].dt.month == obecny_miesiac) & 
-            (df["data"].dt.year == obecny_rok) &
-            (df["typ"] == "Wydatek")
-        ].copy()
-        
-        # Sumujemy wydatki per kategoria (zamieniamy na liczbę dodatnią)
+        df_ten_miesiac = df[(df["data"].dt.month == obecny_miesiac) & (df["data"].dt.year == obecny_rok) & (df["typ"] == "Wydatek")].copy()
         df_ten_miesiac["kwota"] = df_ten_miesiac["kwota"].abs()
         wydatki_suma = df_ten_miesiac.groupby("kategoria")["kwota"].sum()
 
-        # 3. Rysujemy paski dla każdego limitu
         for index, row in df_limity.iterrows():
             kat = row['kategoria']
             limit = float(row['limit'])
-            
-            # Ile wydaliśmy w tej kategorii? (Jeśli nic, to 0)
             wydano = wydatki_suma.get(kat, 0.0)
+            procent = min(wydano / limit, 1.0)
             
-            # Obliczamy procent
-            procent = min(wydano / limit, 1.0) # max 100% dla paska
-            
-            # Kolumny do ładnego wyświetlania
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.write(f"**{kat}**")
-                # Kolor paska zależy od zużycia
-                bar_color = "green"
-                if procent > 0.75: bar_color = "orange" 
-                if procent >= 1.0: bar_color = "red"
-                
                 st.progress(procent)
             with c2:
                 st.write(f"{wydano:.2f} / {limit:.2f} PLN")
-                if wydano > limit:
-                    st.caption(f"🚨 Przekroczono o {wydano - limit:.2f} zł!")
+                if wydano > limit: st.caption(f"🚨 +{wydano - limit:.2f} zł")
 
-# === ZAKŁADKA 2: HISTORIA I FILTRY ===
+# === TAB 2: HISTORIA ===
 with tab2:
     if not df.empty:
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
             dostepne_kategorie = df["kategoria"].unique().tolist()
-            wybrane_kategorie = st.multiselect("Filtruj kategorie:", dostepne_kategorie, default=dostepne_kategorie)
+            wybrane_kategorie = st.multiselect("Filtruj:", dostepne_kategorie, default=dostepne_kategorie)
         with f_col2:
-            min_data = df["data"].min().date()
-            max_data = df["data"].max().date()
-            data_od, data_do = st.date_input("Zakres dat:", [min_data, max_data])
+            min_d = df["data"].min().date()
+            max_d = df["data"].max().date()
+            d_od, d_do = st.date_input("Zakres:", [min_d, max_d])
         
-        maska_kategorii = df["kategoria"].isin(wybrane_kategorie)
-        maska_daty = (df["data"].dt.date >= data_od) & (df["data"].dt.date <= data_do)
-        df_przefiltrowane = df[maska_kategorii & maska_daty].copy().sort_values(by="data", ascending=False)
+        maska = df["kategoria"].isin(wybrane_kategorie) & (df["data"].dt.date >= d_od) & (df["data"].dt.date <= d_do)
+        df_f = df[maska].copy().sort_values(by="data", ascending=False)
         
-        suma_filtrowana = df_przefiltrowane["kwota"].sum()
+        suma = df_f["kwota"].sum()
         with f_col3:
-            st.markdown("**Suma wybranych:**")
-            kolor = "green" if suma_filtrowana >= 0 else "red"
-            st.markdown(f"<h3 style='color: {kolor};'>{suma_filtrowana:.2f} PLN</h3>", unsafe_allow_html=True)
+            kolor = "green" if suma >= 0 else "red"
+            st.markdown(f"Suma: <span style='color:{kolor}; font-size: 1.5em; font-weight:bold'>{suma:.2f} PLN</span>", unsafe_allow_html=True)
 
-        def koloruj_kwoty(val):
-            color = 'red' if val < 0 else 'green'
-            return f'color: {color}; font-weight: bold;'
-
-        df_display = df_przefiltrowane.copy()
-        df_display["data"] = df_display["data"].dt.strftime("%Y-%m-%d %H:%M")
-        
-        st.dataframe(
-            df_display.style.map(koloruj_kwoty, subset=['kwota']).format({"kwota": "{:.2f} PLN"}),
-            use_container_width=True,
-            hide_index=True
-        )
+        def koloruj(val): return f'color: {"red" if val < 0 else "green"}; font-weight: bold;'
+        df_disp = df_f.copy()
+        df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M")
+        st.dataframe(df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), use_container_width=True, hide_index=True)
     else:
         st.info("Brak danych.")
 
-# === ZAKŁADKA 3: WYKRESY ===
+# === TAB 3: WYKRESY ===
 with tab3:
     if not df.empty:
-        wydatki = df[df["kwota"] < 0].copy()
-        if not wydatki.empty:
-            wydatki["kwota"] = wydatki["kwota"].abs()
-            
+        wyd = df[df["kwota"] < 0].copy()
+        if not wyd.empty:
+            wyd["kwota"] = wyd["kwota"].abs()
             c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Struktura wydatków")
-                wykres = wydatki.groupby("kategoria")["kwota"].sum()
-                st.bar_chart(wykres)
+            with c1: st.bar_chart(wyd.groupby("kategoria")["kwota"].sum())
             with c2:
-                st.subheader("Top wydatki")
-                # Pokazujemy 5 najdroższych transakcji
-                top5 = wydatki.sort_values(by="kwota", ascending=False).head(5)
-                for i, row in top5.iterrows():
-                    st.write(f"💸 **{row['kwota']:.2f} zł** - {row['opis']} ({row['data'].strftime('%Y-%m-%d')})")
-        else:
-            st.write("Brak wydatków.")
-
+                st.write("**Top 5 wydatków:**")
+                for i, r in wyd.sort_values("kwota", ascending=False).head(5).iterrows():
+                    st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']}")
+        else: st.write("Brak wydatków.")
