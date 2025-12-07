@@ -79,19 +79,24 @@ class PortfelGoogle:
         except Exception as e:
             return False, f"Błąd zapisu: {e}"
 
-    # --- NOWA FUNKCJA: AUTOMAT ---
+    # --- ULEPSZONY AUTOMAT (Z DATAMI) ---
     def dodaj_cykliczne(self):
         try:
-            # 1. Wczytaj definicje z zakładki 'cykliczne'
             df_cykliczne = self.conn.read(worksheet="cykliczne", ttl=0)
             df_cykliczne = df_cykliczne.dropna(how="all")
             
             if df_cykliczne.empty:
                 return False, "Zakładka 'cykliczne' jest pusta!"
             
-            # 2. Przygotuj dane do dodania
+            # Sprawdzamy czy dodano kolumnę dzień
+            if "dzien" not in df_cykliczne.columns:
+                return False, "Brak kolumny 'dzien' w zakładce cykliczne! Dodaj ją w Arkuszu."
+
             nowe_wiersze = []
-            teraz = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            teraz = datetime.datetime.now()
+            rok = teraz.year
+            miesiac = teraz.month
+            
             suma_dodana = 0
             licznik = 0
             
@@ -99,17 +104,26 @@ class PortfelGoogle:
                 kwota_baza = float(row['kwota'])
                 kwota_final = kwota_baza if row['typ'] == "Wpływ" else -kwota_baza
                 
+                # Ustalanie konkretnej daty
+                dzien_platnosci = int(row['dzien'])
+                
+                # Zabezpieczenie (np. luty nie ma 30 dni), w razie błędu bierze "dzisiaj"
+                try:
+                    data_transakcji = datetime.datetime(rok, miesiac, dzien_platnosci, 12, 0)
+                except ValueError:
+                    # Jeśli ktoś wpisał 31 luty, ustawiamy ostatni dzień miesiąca lub dzisiaj
+                    data_transakcji = teraz
+
                 nowe_wiersze.append({
-                    "data": teraz,
+                    "data": data_transakcji.strftime("%Y-%m-%d %H:%M"),
                     "typ": row['typ'],
                     "kategoria": row['kategoria'],
                     "kwota": kwota_final,
-                    "opis": row['opis'] + " (Auto)" # Dodajemy dopisek Auto
+                    "opis": row['opis'] + " (Auto)"
                 })
                 suma_dodana += kwota_final
                 licznik += 1
             
-            # 3. Dodaj do głównej bazy
             df_main = self.wczytaj_dane()
             if not df_main.empty: df_main["data"] = df_main["data"].dt.strftime("%Y-%m-%d %H:%M")
             
@@ -117,10 +131,10 @@ class PortfelGoogle:
             df_final = pd.concat([df_main, df_nowe], ignore_index=True)
             
             self.conn.update(data=df_final)
-            return True, f"Dodano {licznik} operacji na sumę {suma_dodana:.2f} PLN"
+            return True, f"Dodano {licznik} operacji z datami na sumę {suma_dodana:.2f} PLN"
             
         except Exception as e:
-            return False, f"Błąd automatu: {e} (Sprawdź czy masz zakładkę 'cykliczne')"
+            return False, f"Błąd automatu: {e}"
 
     def oblicz_saldo(self):
         df = self.wczytaj_dane()
@@ -133,14 +147,14 @@ portfel = PortfelGoogle()
 st.sidebar.title("Panel Sterowania")
 st.sidebar.info(f"Zalogowano jako Administrator")
 
-# === NOWOŚĆ: Przycisk Cykliczne ===
+# === Szybkie akcje ===
 st.sidebar.markdown("---")
 st.sidebar.write("⚡ **Szybkie akcje**")
 if st.sidebar.button("🔄 Dodaj płatności cykliczne"):
-    with st.spinner("Przetwarzam stałe opłaty..."):
+    with st.spinner("Układam harmonogram opłat..."):
         sukces, msg = portfel.dodaj_cykliczne()
         if sukces:
-            st.toast(msg, icon="✅") # Nowoczesne powiadomienie dymek
+            st.success(msg)
             st.rerun()
         else:
             st.error(msg)
@@ -155,7 +169,7 @@ st.title("💰 Twój Wirtualny Portfel")
 
 saldo = portfel.oblicz_saldo()
 delta_color = "normal" if saldo >= 0 else "inverse"
-st.metric(label="Aktualne Saldo", value=f"{saldo:.2f} PLN", delta=f"Stan konta", delta_color=delta_color)
+st.metric(label="Aktualne Saldo (Prognoza po opłaceniu)", value=f"{saldo:.2f} PLN", delta=f"Stan konta", delta_color=delta_color)
 
 st.divider()
 
@@ -184,7 +198,7 @@ with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
                     st.error(komunikat)
 
 # --- ZAKŁADKI ---
-tab1, tab2, tab3 = st.tabs(["📊 Budżet (Limity)", "📋 Historia i Filtry", "📈 Analiza Wykresowa"])
+tab1, tab2, tab3 = st.tabs(["📊 Budżet", "📋 Historia i Filtry", "📈 Wykresy"])
 
 df = portfel.wczytaj_dane()
 
@@ -193,7 +207,7 @@ with tab1:
     st.subheader("Twój miesięczny budżet")
     df_limity = portfel.wczytaj_limity()
     if df_limity.empty:
-        st.warning("⚠️ Brak zakładki 'limity' w arkuszu.")
+        st.warning("⚠️ Brak zakładki 'limity'.")
     elif df.empty:
         st.info("Brak wydatków.")
     else:
@@ -239,7 +253,7 @@ with tab2:
 
         def koloruj(val): return f'color: {"red" if val < 0 else "green"}; font-weight: bold;'
         df_disp = df_f.copy()
-        df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M")
+        df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M") # Wyświetlamy tylko datę, bez sekund
         st.dataframe(df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), use_container_width=True, hide_index=True)
     else:
         st.info("Brak danych.")
@@ -255,5 +269,5 @@ with tab3:
             with c2:
                 st.write("**Top 5 wydatków:**")
                 for i, r in wyd.sort_values("kwota", ascending=False).head(5).iterrows():
-                    st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']}")
+                    st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']} ({r['data'].strftime('%d-%m')})")
         else: st.write("Brak wydatków.")
