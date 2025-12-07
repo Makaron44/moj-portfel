@@ -79,18 +79,13 @@ class PortfelGoogle:
         except Exception as e:
             return False, f"Błąd zapisu: {e}"
 
-    # --- ULEPSZONY AUTOMAT (Z DATAMI) ---
     def dodaj_cykliczne(self):
         try:
             df_cykliczne = self.conn.read(worksheet="cykliczne", ttl=0)
             df_cykliczne = df_cykliczne.dropna(how="all")
             
-            if df_cykliczne.empty:
-                return False, "Zakładka 'cykliczne' jest pusta!"
-            
-            # Sprawdzamy czy dodano kolumnę dzień
-            if "dzien" not in df_cykliczne.columns:
-                return False, "Brak kolumny 'dzien' w zakładce cykliczne! Dodaj ją w Arkuszu."
+            if df_cykliczne.empty: return False, "Zakładka 'cykliczne' jest pusta!"
+            if "dzien" not in df_cykliczne.columns: return False, "Brak kolumny 'dzien'!"
 
             nowe_wiersze = []
             teraz = datetime.datetime.now()
@@ -103,16 +98,12 @@ class PortfelGoogle:
             for index, row in df_cykliczne.iterrows():
                 kwota_baza = float(row['kwota'])
                 kwota_final = kwota_baza if row['typ'] == "Wpływ" else -kwota_baza
-                
-                # Ustalanie konkretnej daty
                 dzien_platnosci = int(row['dzien'])
                 
-                # Zabezpieczenie (np. luty nie ma 30 dni), w razie błędu bierze "dzisiaj"
                 try:
                     data_transakcji = datetime.datetime(rok, miesiac, dzien_platnosci, 12, 0)
                 except ValueError:
-                    # Jeśli ktoś wpisał 31 luty, ustawiamy ostatni dzień miesiąca lub dzisiaj
-                    data_transakcji = teraz
+                    data_transakcji = teraz # Zabezpieczenie na koniec miesiąca
 
                 nowe_wiersze.append({
                     "data": data_transakcji.strftime("%Y-%m-%d %H:%M"),
@@ -126,20 +117,11 @@ class PortfelGoogle:
             
             df_main = self.wczytaj_dane()
             if not df_main.empty: df_main["data"] = df_main["data"].dt.strftime("%Y-%m-%d %H:%M")
-            
-            df_nowe = pd.DataFrame(nowe_wiersze)
-            df_final = pd.concat([df_main, df_nowe], ignore_index=True)
-            
+            df_final = pd.concat([df_main, pd.DataFrame(nowe_wiersze)], ignore_index=True)
             self.conn.update(data=df_final)
-            return True, f"Dodano {licznik} operacji z datami na sumę {suma_dodana:.2f} PLN"
-            
+            return True, f"Dodano {licznik} operacji na sumę {suma_dodana:.2f} PLN"
         except Exception as e:
             return False, f"Błąd automatu: {e}"
-
-    def oblicz_saldo(self):
-        df = self.wczytaj_dane()
-        if df.empty: return 0.0
-        return df["kwota"].sum()
 
 portfel = PortfelGoogle()
 
@@ -147,7 +129,6 @@ portfel = PortfelGoogle()
 st.sidebar.title("Panel Sterowania")
 st.sidebar.info(f"Zalogowano jako Administrator")
 
-# === Szybkie akcje ===
 st.sidebar.markdown("---")
 st.sidebar.write("⚡ **Szybkie akcje**")
 if st.sidebar.button("🔄 Dodaj płatności cykliczne"):
@@ -159,7 +140,6 @@ if st.sidebar.button("🔄 Dodaj płatności cykliczne"):
         else:
             st.error(msg)
 st.sidebar.markdown("---")
-
 if st.sidebar.button("Wyloguj"):
     st.session_state["zalogowany"] = False
     st.rerun()
@@ -167,9 +147,59 @@ if st.sidebar.button("Wyloguj"):
 # --- GŁÓWNA CZĘŚĆ ---
 st.title("💰 Twój Wirtualny Portfel")
 
-saldo = portfel.oblicz_saldo()
-delta_color = "normal" if saldo >= 0 else "inverse"
-st.metric(label="Aktualne Saldo (Prognoza po opłaceniu)", value=f"{saldo:.2f} PLN", delta=f"Stan konta", delta_color=delta_color)
+# === NOWOŚĆ: LOGIKA TRZECH KWOT ===
+# 1. Pobieramy wszystkie dane raz
+df = portfel.wczytaj_dane()
+
+saldo_realne = 0.0
+saldo_oczekujace = 0.0
+saldo_prognoza = 0.0
+
+if not df.empty:
+    teraz = datetime.datetime.now()
+    
+    # 2. Dzielimy na przeszłość (i dziś) oraz przyszłość
+    # Realne = wszystko co ma datę <= teraz
+    maska_realne = df["data"] <= teraz
+    saldo_realne = df[maska_realne]["kwota"].sum()
+    
+    # Oczekujące = wszystko co ma datę > teraz
+    maska_przyszle = df["data"] > teraz
+    # Sumujemy tylko przyszłe WYDATKI (żeby wiedzieć ile rachunków wisi)
+    # (Jeśli masz przyszłe wpływy, one też tu wpadną, co pomniejszy dług - to logiczne)
+    saldo_oczekujace = df[maska_przyszle]["kwota"].sum()
+    
+    # Prognoza = Suma wszystkiego
+    saldo_prognoza = df["kwota"].sum()
+
+# === WYŚWIETLANIE 3 KOLUMN ===
+k1, k2, k3 = st.columns(3)
+
+with k1:
+    st.metric(
+        label="💵 Dostępne środki (Dziś)", 
+        value=f"{saldo_realne:.2f} PLN",
+        help="To pieniądze, które faktycznie powinieneś mieć teraz na koncie (transakcje do dziś włącznie)."
+    )
+
+with k2:
+    # Kolorujemy na pomarańczowo/czerwono jeśli są wydatki
+    st.metric(
+        label="⏳ Oczekujące rachunki", 
+        value=f"{saldo_oczekujace:.2f} PLN",
+        delta="Do zapłaty" if saldo_oczekujace < 0 else "Wpływy",
+        delta_color="inverse", # Czerwony jak ujemne
+        help="To suma transakcji zaplanowanych na przyszłość (np. z automatu)."
+    )
+
+with k3:
+    # Prognoza końcowa
+    st.metric(
+        label="🔮 Prognoza (Po opłatach)", 
+        value=f"{saldo_prognoza:.2f} PLN",
+        delta="Stan końcowy",
+        help="Tyle Ci zostanie, gdy opłacisz wszystkie zaplanowane rachunki."
+    )
 
 st.divider()
 
@@ -181,9 +211,10 @@ with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
     with col2:
         kwota_input = st.number_input("Kwota (PLN):", min_value=0.0, format="%.2f", step=1.0)
     with col3:
-        kategorie = ["Jedzenie", "Rachunki", "Transport", "Rozrywka", "Inne", "Wypłata", "Paliwo", "Dom", "Zdrowie"]
+        # Dodana kategoria Bilans otwarcia
+        kategorie = ["Jedzenie", "Rachunki", "Transport", "Rozrywka", "Inne", "Wypłata", "Paliwo", "Dom", "Zdrowie", "Bilans otwarcia"]
         if typ_transakcji == "Wpływ":
-            kat_input = "Wpływ"
+            kat_input = st.selectbox("Kategoria:", kategorie, index=5) # Domyślnie Wypłata
         else:
             kat_input = st.selectbox("Kategoria:", kategorie)
     with col4:
@@ -199,8 +230,6 @@ with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
 
 # --- ZAKŁADKI ---
 tab1, tab2, tab3 = st.tabs(["📊 Budżet", "📋 Historia i Filtry", "📈 Wykresy"])
-
-df = portfel.wczytaj_dane()
 
 # === TAB 1: BUDŻET ===
 with tab1:
@@ -234,6 +263,10 @@ with tab1:
 # === TAB 2: HISTORIA ===
 with tab2:
     if not df.empty:
+        # Dodajemy informację o statusie (Realne/Oczekujące) w tabeli
+        df_hist = df.copy()
+        df_hist["Status"] = df_hist["data"].apply(lambda x: "🕒 Oczekujące" if x > datetime.datetime.now() else "✅ Zaksięgowane")
+        
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
             dostepne_kategorie = df["kategoria"].unique().tolist()
@@ -244,7 +277,7 @@ with tab2:
             d_od, d_do = st.date_input("Zakres:", [min_d, max_d])
         
         maska = df["kategoria"].isin(wybrane_kategorie) & (df["data"].dt.date >= d_od) & (df["data"].dt.date <= d_do)
-        df_f = df[maska].copy().sort_values(by="data", ascending=False)
+        df_f = df_hist[maska].copy().sort_values(by="data", ascending=False)
         
         suma = df_f["kwota"].sum()
         with f_col3:
@@ -252,8 +285,12 @@ with tab2:
             st.markdown(f"Suma: <span style='color:{kolor}; font-size: 1.5em; font-weight:bold'>{suma:.2f} PLN</span>", unsafe_allow_html=True)
 
         def koloruj(val): return f'color: {"red" if val < 0 else "green"}; font-weight: bold;'
-        df_disp = df_f.copy()
-        df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M") # Wyświetlamy tylko datę, bez sekund
+        
+        # Wyświetlamy tabelę z nową kolumną Status
+        cols_to_show = ["data", "Status", "typ", "kategoria", "kwota", "opis"]
+        df_disp = df_f[cols_to_show].copy()
+        df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M")
+        
         st.dataframe(df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), use_container_width=True, hide_index=True)
     else:
         st.info("Brak danych.")
@@ -269,5 +306,5 @@ with tab3:
             with c2:
                 st.write("**Top 5 wydatków:**")
                 for i, r in wyd.sort_values("kwota", ascending=False).head(5).iterrows():
-                    st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']} ({r['data'].strftime('%d-%m')})")
+                    st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']}")
         else: st.write("Brak wydatków.")
