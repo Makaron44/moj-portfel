@@ -188,9 +188,9 @@ with tab1:
                 
                 st.progress(procent)
             with c2:
-                st.write(f"{wydano:.0f} / {limit:.0f} PLN")
+                st.write(f"{wydano:.2f} / {limit:.2f} PLN")
                 if wydano > limit:
-                    st.caption(f"🚨 Przekroczono o {wydano - limit:.0f} zł!")
+                    st.caption(f"🚨 Przekroczono o {wydano - limit:.2f} zł!")
 
 # === ZAKŁADKA 2: HISTORIA I FILTRY ===
 with tab2:
@@ -249,3 +249,4 @@ with tab3:
                     st.write(f"💸 **{row['kwota']:.2f} zł** - {row['opis']} ({row['data'].strftime('%Y-%m-%d')})")
         else:
             st.write("Brak wydatków.")
+
