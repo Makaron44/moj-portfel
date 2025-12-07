@@ -211,11 +211,19 @@ with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
     with col2:
         kwota_input = st.number_input("Kwota (PLN):", min_value=0.0, format="%.2f", step=1.0)
     with col3:
-        # Dodana kategoria Bilans otwarcia
-        kategorie = ["Jedzenie", "Rachunki", "Transport", "Rozrywka", "Inne", "Wypłata", "Paliwo", "Dom", "Zdrowie", "Bilans otwarcia"]
+        # LOGIKA: Różne kategorie dla Wpływów i Wydatków
         if typ_transakcji == "Wpływ":
-            kat_input = st.selectbox("Kategoria:", kategorie, index=5) # Domyślnie Wypłata
+            # Lista tylko dla wpływów
+            kategorie = ["Pensja", "Premia", "Zwrot podatku", "Sprzedaż", "Inne", "Bilans otwarcia"]
+            # Domyślnie zaznaczamy "Pensja" (index 0) lub "Bilans" (ostatni)
+            kat_input = st.selectbox("Kategoria:", kategorie, index=0)
         else:
+            # Lista tylko dla wydatków
+            kategorie = [
+                "Jedzenie", "Rachunki", "Transport", "Rozrywka", 
+                "Inne", "Paliwo", "Dom", "Zdrowie", 
+                "Bankomat (Gotówka)"  # <-- Jasna nazwa dla wypłaty z bankomatu
+            ]
             kat_input = st.selectbox("Kategoria:", kategorie)
     with col4:
         opis_input = st.text_input("Opis:")
@@ -308,3 +316,4 @@ with tab3:
                 for i, r in wyd.sort_values("kwota", ascending=False).head(5).iterrows():
                     st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']}")
         else: st.write("Brak wydatków.")
+
