@@ -4,7 +4,7 @@ import datetime
 from streamlit_gsheets import GSheetsConnection
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Mój Portfel", page_icon="💰", layout="wide")
+st.set_page_config(page_title="Mój Portfel Pro", page_icon="💰", layout="wide")
 
 # ==========================================
 # --- BRAMKARZ (LOGOWANIE) ---
@@ -103,7 +103,7 @@ class PortfelGoogle:
                 try:
                     data_transakcji = datetime.datetime(rok, miesiac, dzien_platnosci, 12, 0)
                 except ValueError:
-                    data_transakcji = teraz # Zabezpieczenie na koniec miesiąca
+                    data_transakcji = teraz 
 
                 nowe_wiersze.append({
                     "data": data_transakcji.strftime("%Y-%m-%d %H:%M"),
@@ -125,9 +125,14 @@ class PortfelGoogle:
 
 portfel = PortfelGoogle()
 
-# --- PASEK BOCZNY ---
+# --- WCZYTANIE DANYCH DO OBLICZEŃ ---
+df = portfel.wczytaj_dane()
+
+# ==========================================
+# --- PASEK BOCZNY (SIDEBAR) ---
+# ==========================================
 st.sidebar.title("Panel Sterowania")
-st.sidebar.info(f"Zalogowano jako Administrator")
+st.sidebar.info(f"Witaj! Dzisiaj jest: {datetime.date.today()}")
 
 st.sidebar.markdown("---")
 st.sidebar.write("⚡ **Szybkie akcje**")
@@ -139,95 +144,116 @@ if st.sidebar.button("🔄 Dodaj płatności cykliczne"):
             st.rerun()
         else:
             st.error(msg)
+
+# --- NOWOŚĆ 1: CEL MARZEŃ (OSZCZĘDNOŚCI) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎯 Cel: Oszczędzanie")
+cel_kwota = st.sidebar.number_input("Twój Cel (PLN):", value=10000.0, step=500.0)
+
+uzbierane = 0.0
+if not df.empty:
+    # Szukamy wydatków w kategorii 'Oszczędności 💰'
+    maska_oszczednosci = df["kategoria"] == "Oszczędności 💰"
+    uzbierane = df[maska_oszczednosci]["kwota"].abs().sum()
+
+procent = min(uzbierane / cel_kwota, 1.0) if cel_kwota > 0 else 0
+st.sidebar.progress(procent)
+st.sidebar.write(f"Uzbierano: **{uzbierane:.2f} PLN**")
+st.sidebar.caption(f"({procent*100:.1f}% celu)")
+if uzbierane >= cel_kwota:
+    st.sidebar.success("🎉 CEL OSIĄGNIĘTY!")
+
+# --- NOWOŚĆ 2: KALKULATOR ŻYCIA ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("⏳ Kalkulator Życia")
+st.sidebar.caption("Przelicz cenę na godziny swojej pracy")
+twoja_stawka = st.sidebar.number_input("Stawka netto/h:", value=30.0, step=1.0)
+koszt_rzeczy = st.sidebar.number_input("Cena zakupu:", value=0.0, step=10.0)
+
+if koszt_rzeczy > 0:
+    godziny = koszt_rzeczy / twoja_stawka
+    st.sidebar.write(f"Kosztuje to: **{godziny:.1f} godz.** pracy")
+    if godziny > 8:
+        dniowki = godziny / 8
+        st.sidebar.error(f"To ponad {dniowki:.1f} dniówki!")
+    else:
+        st.sidebar.success("Kupuj, to tylko chwila pracy!")
+
 st.sidebar.markdown("---")
 if st.sidebar.button("Wyloguj"):
     st.session_state["zalogowany"] = False
     st.rerun()
 
-# --- GŁÓWNA CZĘŚĆ ---
-st.title("💰 Twój Wirtualny Portfel")
+# ==========================================
+# --- GŁÓWNA CZĘŚĆ (MAIN) ---
+# ==========================================
+st.title("💰 Twój Asystent Finansowy")
 
-# === NOWOŚĆ: LOGIKA TRZECH KWOT ===
-# 1. Pobieramy wszystkie dane raz
-df = portfel.wczytaj_dane()
-
+# LOGIKA TRZECH KWOT
 saldo_realne = 0.0
 saldo_oczekujace = 0.0
 saldo_prognoza = 0.0
 
 if not df.empty:
     teraz = datetime.datetime.now()
-    
-    # 2. Dzielimy na przeszłość (i dziś) oraz przyszłość
-    # Realne = wszystko co ma datę <= teraz
+    # Realne = data <= teraz
     maska_realne = df["data"] <= teraz
     saldo_realne = df[maska_realne]["kwota"].sum()
     
-    # Oczekujące = wszystko co ma datę > teraz
+    # Oczekujące = data > teraz
     maska_przyszle = df["data"] > teraz
-    # Sumujemy tylko przyszłe WYDATKI (żeby wiedzieć ile rachunków wisi)
-    # (Jeśli masz przyszłe wpływy, one też tu wpadną, co pomniejszy dług - to logiczne)
     saldo_oczekujace = df[maska_przyszle]["kwota"].sum()
     
     # Prognoza = Suma wszystkiego
     saldo_prognoza = df["kwota"].sum()
 
-# === WYŚWIETLANIE 3 KOLUMN ===
+# --- NOWOŚĆ 3: FINANSOWE SUMIENIE ---
+# Komentarz zależny od prognozy
+if saldo_prognoza > 5000:
+    st.success("🚀 Jest świetnie! Saldo wygląda imponująco. Może mała inwestycja?")
+elif saldo_prognoza > 2000:
+    st.info("👌 Sytuacja stabilna. Masz bezpieczny zapas gotówki.")
+elif saldo_prognoza > 500:
+    st.warning("⚠️ Uważaj. Zbliżasz się do granicy bezpieczeństwa.")
+elif saldo_prognoza > 0:
+    st.error("🚨 Alarm! Balansujesz na krawędzi. Żadnych zbędnych wydatków!")
+else:
+    st.error("💀 Jesteś pod kreską. Włącz tryb oszczędzania TOTALNEGO.")
+
+# METRYKI
 k1, k2, k3 = st.columns(3)
-
 with k1:
-    st.metric(
-        label="💵 Dostępne środki (Dziś)", 
-        value=f"{saldo_realne:.2f} PLN",
-        help="To pieniądze, które faktycznie powinieneś mieć teraz na koncie (transakcje do dziś włącznie)."
-    )
-
+    st.metric(label="💵 Dostępne środki (Dziś)", value=f"{saldo_realne:.2f} PLN")
 with k2:
-    # Kolorujemy na pomarańczowo/czerwono jeśli są wydatki
-    st.metric(
-        label="⏳ Oczekujące rachunki", 
-        value=f"{saldo_oczekujace:.2f} PLN",
-        delta="Do zapłaty" if saldo_oczekujace < 0 else "Wpływy",
-        delta_color="inverse", # Czerwony jak ujemne
-        help="To suma transakcji zaplanowanych na przyszłość (np. z automatu)."
-    )
-
+    st.metric(label="⏳ Oczekujące rachunki", value=f"{saldo_oczekujace:.2f} PLN", 
+              delta="Wpływy" if saldo_oczekujace > 0 else "Opłaty", delta_color="inverse")
 with k3:
-    # Prognoza końcowa
-    st.metric(
-        label="🔮 Prognoza (Po opłatach)", 
-        value=f"{saldo_prognoza:.2f} PLN",
-        delta="Stan końcowy",
-        help="Tyle Ci zostanie, gdy opłacisz wszystkie zaplanowane rachunki."
-    )
+    st.metric(label="🔮 Prognoza (Po opłatach)", value=f"{saldo_prognoza:.2f} PLN", delta="Stan końcowy")
 
 st.divider()
 
 # --- DODAWANIE ---
-with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
+with st.expander("➕ Dodaj transakcję", expanded=False):
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         typ_transakcji = st.radio("Rodzaj:", ["Wydatek", "Wpływ"], horizontal=True)
     with col2:
         kwota_input = st.number_input("Kwota (PLN):", min_value=0.0, format="%.2f", step=1.0)
     with col3:
-        # LOGIKA: Różne kategorie dla Wpływów i Wydatków
         if typ_transakcji == "Wpływ":
-            # Lista tylko dla wpływów
             kategorie = ["Pensja", "Premia", "Zwrot podatku", "Sprzedaż", "Inne", "Bilans otwarcia"]
-            # Domyślnie zaznaczamy "Pensja" (index 0) lub "Bilans" (ostatni)
             kat_input = st.selectbox("Kategoria:", kategorie, index=0)
         else:
-            # Lista tylko dla wydatków
+            # Tu dodaliśmy "Oszczędności" do listy
             kategorie = [
                 "Jedzenie", "Rachunki", "Transport", "Rozrywka", 
                 "Inne", "Paliwo", "Dom", "Zdrowie", 
-                "Bankomat (Gotówka)"  # <-- Jasna nazwa dla wypłaty z bankomatu
+                "Bankomat (Gotówka)", "Oszczędności 💰"
             ]
             kat_input = st.selectbox("Kategoria:", kategorie)
     with col4:
         opis_input = st.text_input("Opis:")
-        if st.button("Zapisz transakcję", use_container_width=True):
+        if st.button("Zapisz", use_container_width=True):
             with st.spinner("Zapisuję..."):
                 sukces, komunikat = portfel.dodaj_transakcje(typ_transakcji, kwota_input, kat_input, opis_input)
                 if sukces:
@@ -237,11 +263,11 @@ with st.expander("➕ Dodaj pojedynczą transakcję", expanded=False):
                     st.error(komunikat)
 
 # --- ZAKŁADKI ---
-tab1, tab2, tab3 = st.tabs(["📊 Budżet", "📋 Historia i Filtry", "📈 Wykresy"])
+tab1, tab2, tab3 = st.tabs(["📊 Budżet", "📋 Historia i Szukaj", "📈 Wykresy"])
 
 # === TAB 1: BUDŻET ===
 with tab1:
-    st.subheader("Twój miesięczny budżet")
+    st.subheader("Realizacja budżetu")
     df_limity = portfel.wczytaj_limity()
     if df_limity.empty:
         st.warning("⚠️ Brak zakładki 'limity'.")
@@ -268,20 +294,15 @@ with tab1:
                 st.write(f"{wydano:.2f} / {limit:.2f} PLN")
                 if wydano > limit: st.caption(f"🚨 +{wydano - limit:.2f} zł")
 
-# === TAB 2: HISTORIA ===
+# === TAB 2: HISTORIA I WYSZUKIWARKA ===
 with tab2:
     if not df.empty:
-        # Dodajemy informację o statusie
         df_hist = df.copy()
         df_hist["Status"] = df_hist["data"].apply(lambda x: "🕒 Oczekujące" if x > datetime.datetime.now() else "✅ Zaksięgowane")
         
-        # --- SEKCJA FILTRÓW (TERAZ Z WYSZUKIWARKĄ) ---
         st.caption("Filtrowanie i przeszukiwanie bazy")
-        
-        # Rząd 1: Wyszukiwarka tekstowa (To jest nowość!)
         szukana_fraza = st.text_input("🔍 Szukaj w opisach (np. 'Biedronka', 'Prezent'):", placeholder="Wpisz szukane słowo...")
 
-        # Rząd 2: Filtry standardowe
         f_col1, f_col2 = st.columns(2)
         with f_col1:
             dostepne_kategorie = df["kategoria"].unique().tolist()
@@ -291,23 +312,14 @@ with tab2:
             max_d = df["data"].max().date()
             d_od, d_do = st.date_input("Zakres dat:", [min_d, max_d])
         
-        # --- LOGIKA FILTROWANIA ---
-        # 1. Filtrujemy po kategoriach i dacie
         maska = df["kategoria"].isin(wybrane_kategorie) & (df["data"].dt.date >= d_od) & (df["data"].dt.date <= d_do)
-        
-        # 2. Jeśli ktoś coś wpisał w wyszukiwarkę -> dodajemy ten warunek
         if szukana_fraza:
-            # case=False oznacza, że wielkość liter nie ma znaczenia (Auto = auto)
-            # na=False oznacza, że ignorujemy puste opisy
             maska = maska & (df["opis"].str.contains(szukana_fraza, case=False, na=False))
 
-        # Aplikujemy filtry
         df_f = df_hist[maska].copy().sort_values(by="data", ascending=False)
         
-        # --- PODSUMOWANIE WYNIKÓW ---
         st.divider()
         col_res1, col_res2 = st.columns([1, 3])
-        
         suma = df_f["kwota"].sum()
         with col_res1:
             st.markdown("Wynik wyszukiwania:")
@@ -315,7 +327,6 @@ with tab2:
             st.markdown(f"<span style='color:{kolor}; font-size: 1.8em; font-weight:bold'>{suma:.2f} PLN</span>", unsafe_allow_html=True)
             st.caption(f"Znaleziono: {len(df_f)} operacji")
 
-        # --- TABELA ---
         def koloruj(val): return f'color: {"red" if val < 0 else "green"}; font-weight: bold;'
         
         cols_to_show = ["data", "Status", "typ", "kategoria", "kwota", "opis"]
@@ -323,11 +334,7 @@ with tab2:
         df_disp["data"] = df_disp["data"].dt.strftime("%Y-%m-%d %H:%M")
         
         with col_res2:
-            st.dataframe(
-                df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), 
-                use_container_width=True, 
-                hide_index=True
-            )
+            st.dataframe(df_disp.style.map(koloruj, subset=['kwota']).format({"kwota": "{:.2f} PLN"}), use_container_width=True, hide_index=True)
     else:
         st.info("Brak danych w bazie.")
 
@@ -338,11 +345,11 @@ with tab3:
         if not wyd.empty:
             wyd["kwota"] = wyd["kwota"].abs()
             c1, c2 = st.columns(2)
-            with c1: st.bar_chart(wyd.groupby("kategoria")["kwota"].sum())
+            with c1: 
+                st.subheader("Struktura wydatków")
+                st.bar_chart(wyd.groupby("kategoria")["kwota"].sum())
             with c2:
-                st.write("**Top 5 wydatków:**")
+                st.subheader("Top 5 Wydatków")
                 for i, r in wyd.sort_values("kwota", ascending=False).head(5).iterrows():
-                    st.write(f"💸 {r['kwota']:.2f} zł - {r['opis']}")
+                    st.write(f"💸 **{r['kwota']:.2f} zł** - {r['opis']} ({r['kategoria']})")
         else: st.write("Brak wydatków.")
-
-
